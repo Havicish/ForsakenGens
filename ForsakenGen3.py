@@ -1,4 +1,5 @@
-#import pyautogui as Gui
+import pyautogui as Gui
+from itertools import permutations
 import time
 import mss
 import threading
@@ -10,10 +11,10 @@ from random import randint
 from queue import Queue
 from collections import deque
 
-#Gui.PAUSE = 0.03
+Gui.PAUSE = 0.1
 
 MainConsole = Console()
-MainConsole.clear()
+#MainConsole.clear()
 
 GetColorX = 727 + 3
 GetColorY = 312 + 3
@@ -22,7 +23,7 @@ GetIfOnGenY = 277
 
 EmptyColor = (12, 12, 12)
 
-system("clear")
+#system("clear")
 
 class Grid:
     def __init__(self):
@@ -61,7 +62,10 @@ class Grid:
             NewRow = []
             for j in range(0, 6):
                 Color = Img.getpixel((GetColorX + 86 * j, GetColorY + 86 * i))
-                NewRow.append(Color)
+                if Color == EmptyColor:
+                    NewRow.append(EmptyColor + (False,))
+                else:
+                    NewRow.append(Color + (True,))
             self.Grid.append(NewRow)
         
         return self.Grid
@@ -82,12 +86,16 @@ class Grid:
                     MainConsole.print(Text("+", style=f"{RgbToHex(Color)}"), end = " ")
             MainConsole.print()
 
-    def ResetConnects(self):
+    def ResetConnects(self, ColorSpecific = None):
         for i in range(0, 6):
             for j in range(0, 6):
                 Color = self.Grid[i][j]
-                if Color[3] == False:
-                    self.Grid[i][j] = EmptyColor + (False,)
+                if ColorSpecific is None:
+                    if Color[3] == False:
+                        self.Grid[i][j] = EmptyColor + (False,)
+                else:
+                    if Color[3] == False and Color[0:3] == ColorSpecific[0:3]:
+                        self.Grid[i][j] = EmptyColor + (False,)
 
     def GetPartner(self, Color: tuple, i: int, j: int):
         for x in range(0, 6):
@@ -104,9 +112,13 @@ class Grid:
         StartingColor = self.Grid[Path[0][0]][Path[0][1]]
         if StartingColor[3] == False:
             return
-        
-        for i in range(0, len(Path)):
-            self.Grid[Path[i][0]][Path[i][1]] = (StartingColor[0], StartingColor[1], StartingColor[2], self.Grid[Path[i][0]][Path[i][1]][3])
+
+        for i, j in Path:
+            self.Grid[i][j] = (StartingColor[0], StartingColor[1], StartingColor[2], False)
+        # Restore node status at ends
+        self.Grid[Path[0][0]][Path[0][1]] = StartingColor
+        self.Grid[Path[-1][0]][Path[-1][1]] = StartingColor
+
 
     def FindPath(self, i0, j0, i1, j1):
         directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
@@ -125,31 +137,104 @@ class Grid:
 
             for dx, dy in directions:
                 nx, ny = x + dx, y + dy
-                if 0 <= nx < 6 and 0 <= ny < 6:
-                    MainConsole.print(Text(f"{nx}, {ny}", style=RgbToHex(self.Grid[nx][ny])), end=" ")
-                    print(self.Grid[nx][ny])
                 if 0 <= nx < 6 and 0 <= ny < 6 and (nx, ny) not in visited and (self.Grid[nx][ny] == EmptyColor + (False,) or self.Grid[nx][ny] == self.Grid[i0][j0]):
                     queue.append((nx, ny, path))
 
         return []
     
+    def FindAllPaths(self, i0, j0, i1, j1):
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        visited = set()
+        queue = deque([(i0, j0, [])])
+        paths = []
+
+        while queue:
+            x, y, path = queue.popleft()
+            if (x, y) in visited:
+                continue
+            visited.add((x, y))
+            path = path + [(x, y)]
+
+            if (x, y) == (i1, j1):
+                paths.append(path)
+                continue
+
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < 6 and 0 <= ny < 6 and (nx, ny) not in visited and (self.Grid[nx][ny] == EmptyColor + (False,) or self.Grid[nx][ny] == self.Grid[i0][j0]):
+                    queue.append((nx, ny, path))
+
+        return paths
+    
+    from itertools import permutations
+
     def Solve(self):
-        PairsNeeded = []
+        Pairs = []
+        Seen = set()
+
         for i in range(6):
             for j in range(6):
                 Color = self.Grid[i][j]
+                if Color[3] == True and Color not in Seen:
+                    Partner = self.GetPartner(Color, i, j)
+                    if Partner:
+                        Pairs.append(((i, j), Partner))
+                        Seen.add(Color)
+
+        def Backtrack(PairOrder, Index):
+            if Index == len(PairOrder):
+                return True
+
+            (i0, j0), (i1, j1) = PairOrder[Index]
+            Paths = self.FindAllPaths(i0, j0, i1, j1)
+            for Path in Paths:
+                Backup = [row[:] for row in self.Grid]
+                self.FollowPath(Path)
+                if Backtrack(PairOrder, Index + 1):
+                    return True
+                self.Grid = [row[:] for row in Backup]
+            return False
+
+        for Order in permutations(Pairs):
+            if Backtrack(Order, 0):
+                return
+
+    def CheckAllPathsValid(self):
+        for i in range(0, 6):
+            for j in range(0, 6):
+                Color = self.Grid[i][j]
                 if Color[3] == True:
                     Partner = self.GetPartner(Color, i, j)
-                    if Partner != None:
-                        if abs(i - Partner[0]) + abs(j - Partner[1]) == 1:
-                            continue
-                        if (Partner[0], Partner[1], i, j) not in PairsNeeded:
-                            PairsNeeded.append((i, j, Partner[0], Partner[1]))
+                    if Partner is not None:
+                        Path = self.FindPath(i, j, Partner[0], Partner[1])
+                        if not Path:
+                            return False
+        return True
+    
+    def MoveMouse(self):
+        ColorsDone = []
+        for i in range(0, 6):
+            for j in range(0, 6):
+                Color = self.Grid[i][j]
+                if Color[3] == True and Color not in ColorsDone:
+                    ColorsDone.append(Color)
+                    visited = set()
+                    stack = [(i, j)]
 
-        for i0, j0, i1, j1 in PairsNeeded:
-            Path = self.FindPath(i0, j0, i1, j1)
-            if Path:
-                self.FollowPath(Path)
+                    Gui.mouseDown(GetColorX + 86 * j, GetColorY + 86 * i)
+                    while stack:
+                        x, y = stack.pop()
+                        if (x, y) in visited:
+                            continue
+                        visited.add((x, y))
+
+                        Gui.moveTo(GetColorX + 86 * y, GetColorY + 86 * x)
+
+                        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            nx, ny = x + dx, y + dy
+                            if 0 <= nx < 6 and 0 <= ny < 6 and (nx, ny) not in visited and self.Grid[nx][ny][0:3] == Color[0:3]:
+                                stack.append((nx, ny))
+                    Gui.mouseUp()
 
 def GetImg():
     with mss.mss() as sct:
@@ -172,8 +257,14 @@ def GetIfOnGen():
 
 def RgbToHex(Color):
     return "#{:02X}{:02X}{:02X}".format(Color[0], Color[1], Color[2])
-    
-MainGrid = Grid()
-MainGrid.MakeGrid(True)
-MainGrid.Solve()
-MainGrid.Print()
+
+while True:    
+    time.sleep(0.5)
+
+    if GetIfOnGen():
+        MainGrid = Grid()
+        MainGrid.MakeGrid()
+        MainGrid.Solve()
+        MainGrid.MoveMouse()
+        MainGrid.Print()
+        Gui.moveTo(GetColorX + 86 * 3, GetColorY + 86 * -1)
